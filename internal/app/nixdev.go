@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -90,7 +91,7 @@ func normalizeNixdevDocname(query string) string {
 }
 
 func extractNixdevTitle(body, fallback string) string {
-	for _, raw := range strings.Split(body, "\n") {
+	for raw := range strings.SplitSeq(body, "\n") {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "# ") {
 			if t := strings.TrimSpace(line[2:]); t != "" {
@@ -110,10 +111,8 @@ func infoNixdev(ctx context.Context, query string) string {
 	if docname == "" {
 		return errMsg("Empty docname after normalization")
 	}
-	for _, seg := range strings.Split(docname, "/") {
-		if seg == ".." {
-			return errMsg("Invalid docname: path traversal not allowed")
-		}
+	if slices.Contains(strings.Split(docname, "/"), "..") {
+		return errMsg("Invalid docname: path traversal not allowed")
 	}
 
 	url := nixdevBaseURL + "/_sources/" + docname + ".md"

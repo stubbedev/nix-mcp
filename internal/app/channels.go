@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
 	"regexp"
 	"sort"
 	"strconv"
@@ -63,14 +64,12 @@ func discoverAvailable(ctx context.Context) map[string]string {
 	for _, gen := range generations {
 		for _, v := range versions {
 			pattern := fmt.Sprintf("latest-%d-nixos-%s", gen, v)
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				count, err := esCount(ctx, pattern, map[string]any{"match_all": map[string]any{}}, 10*time.Second)
+			safeGo(&wg, func() {
+				count, err := esCount(ctx, pattern, map[string]any{"match_all": map[string]any{}})
 				if err == nil && count > 0 {
 					ch <- res{pattern, comma(count) + " documents"}
 				}
-			}()
+			})
 		}
 	}
 	wg.Wait()
@@ -162,9 +161,7 @@ func resolveChannels(available map[string]string, usingFallback *bool) map[strin
 
 func cloneMap(m map[string]string) map[string]string {
 	out := make(map[string]string, len(m))
-	for k, v := range m {
-		out[k] = v
-	}
+	maps.Copy(out, m)
 	return out
 }
 

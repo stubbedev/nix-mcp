@@ -45,7 +45,7 @@ func parseRootHeaders(h http.Header) []mcpRoot {
 	var roots []mcpRoot
 	for _, name := range rootHeaders {
 		for _, v := range h.Values(name) {
-			for _, part := range strings.Split(v, ",") {
+			for part := range strings.SplitSeq(v, ",") {
 				if r, ok := rootFromString(part); ok {
 					roots = append(roots, r)
 				}

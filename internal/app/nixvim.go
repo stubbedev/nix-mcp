@@ -111,8 +111,8 @@ func statsNixvim(ctx context.Context) string {
 	for _, opt := range options {
 		name := srcStr(opt, "name")
 		cat := name
-		if i := strings.Index(name, "."); i >= 0 {
-			cat = name[:i]
+		if before, _, ok := strings.Cut(name, "."); ok {
+			cat = before
 		}
 		categories[cat]++
 	}
@@ -138,8 +138,8 @@ func browseNixvim(ctx context.Context, prefix string) string {
 		for _, opt := range options {
 			name := srcStr(opt, "name")
 			cat := name
-			if i := strings.Index(name, "."); i >= 0 {
-				cat = name[:i]
+			if before, _, ok := strings.Cut(name, "."); ok {
+				cat = before
 			}
 			categories[cat]++
 		}

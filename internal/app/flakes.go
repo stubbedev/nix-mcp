@@ -17,6 +17,67 @@ type flakeEntry struct {
 	packages    map[string]bool
 }
 
+// flakeCollector de-duplicates flake hits while preserving first-seen order.
+type flakeCollector struct {
+	order  []string
+	flakes map[string]*flakeEntry
+}
+
+func (c *flakeCollector) add(key string, e *flakeEntry) *flakeEntry {
+	if _, ok := c.flakes[key]; !ok {
+		c.flakes[key] = e
+		c.order = append(c.order, key)
+	}
+	return c.flakes[key]
+}
+
+// addHit folds one ES hit into the collector (matches the Python dedup logic:
+// key by owner/repo, else url, else flake name).
+func (c *flakeCollector) addHit(src map[string]any) {
+	flakeName := strings.TrimSpace(srcStr(src, "flake_name"))
+	packagePname := srcStr(src, "package_pname")
+	if flakeName == "" && packagePname == "" {
+		return
+	}
+	resolved, _ := src["flake_resolved"].(map[string]any)
+	owner, repo, urlv := srcStr(resolved, "owner"), srcStr(resolved, "repo"), srcStr(resolved, "url")
+	desc := firstNonEmpty(srcStr(src, "flake_description"), srcStr(src, "package_description"))
+	attrName := srcStr(src, "package_attr_name")
+
+	var entry *flakeEntry
+	switch {
+	case resolved != nil && (owner != "" || repo != "" || urlv != ""):
+		key, displayName := flakeKeyAndName(flakeName, packagePname, owner, repo, urlv)
+		entry = c.add(
+			key,
+			&flakeEntry{name: displayName, description: desc, owner: owner, repo: repo, url: urlv, packages: map[string]bool{}},
+		)
+	case flakeName != "":
+		entry = c.add(flakeName, &flakeEntry{name: flakeName, description: desc, packages: map[string]bool{}})
+	default:
+		return
+	}
+	if attrName != "" {
+		entry.packages[attrName] = true
+	}
+}
+
+func flakeKeyAndName(flakeName, packagePname, owner, repo, urlv string) (key, displayName string) {
+	switch {
+	case owner != "" && repo != "":
+		return owner + "/" + repo, firstNonEmpty(flakeName, repo, packagePname)
+	case urlv != "":
+		base := strings.TrimSuffix(strings.TrimRight(urlv, "/"), ".git")
+		if i := strings.LastIndex(base, "/"); i >= 0 {
+			base = base[i+1:]
+		}
+		return urlv, firstNonEmpty(flakeName, base, packagePname)
+	default:
+		k := firstNonEmpty(flakeName, packagePname)
+		return k, k
+	}
+}
+
 func searchFlakes(ctx context.Context, query string, limit int) string {
 	var q map[string]any
 	if strings.TrimSpace(query) == "" || query == "*" {
@@ -58,81 +119,20 @@ func searchFlakes(ctx context.Context, query string, limit int) string {
 		return fmt.Sprintf("No flakes found matching '%s'", query)
 	}
 
-	order := []string{}
-	flakes := map[string]*flakeEntry{}
-	add := func(key string, e *flakeEntry) {
-		if _, ok := flakes[key]; !ok {
-			flakes[key] = e
-			order = append(order, key)
-		}
-	}
-
+	c := &flakeCollector{flakes: map[string]*flakeEntry{}}
 	for _, hit := range hits {
-		src := hit.Source
-		flakeName := strings.TrimSpace(srcStr(src, "flake_name"))
-		packagePname := srcStr(src, "package_pname")
-		resolved, _ := src["flake_resolved"].(map[string]any)
-
-		if flakeName == "" && packagePname == "" {
-			continue
-		}
-
-		mapStr := func(m map[string]any, k string) string {
-			if m == nil {
-				return ""
-			}
-			if s, ok := m[k].(string); ok {
-				return s
-			}
-			return ""
-		}
-		owner := mapStr(resolved, "owner")
-		repo := mapStr(resolved, "repo")
-		urlv := mapStr(resolved, "url")
-		attrName := srcStr(src, "package_attr_name")
-
-		if resolved != nil && (owner != "" || repo != "" || urlv != "") {
-			var flakeKey, displayName string
-			if owner != "" && repo != "" {
-				flakeKey = owner + "/" + repo
-				displayName = firstNonEmpty(flakeName, repo, packagePname)
-			} else if urlv != "" {
-				flakeKey = urlv
-				base := strings.TrimSuffix(strings.TrimRight(urlv, "/"), ".git")
-				if i := strings.LastIndex(base, "/"); i >= 0 {
-					base = base[i+1:]
-				}
-				displayName = firstNonEmpty(flakeName, base, packagePname)
-			} else {
-				flakeKey = firstNonEmpty(flakeName, packagePname)
-				displayName = flakeKey
-			}
-			desc := firstNonEmpty(srcStr(src, "flake_description"), srcStr(src, "package_description"))
-			add(
-				flakeKey,
-				&flakeEntry{name: displayName, description: desc, owner: owner, repo: repo, url: urlv, packages: map[string]bool{}},
-			)
-			if attrName != "" {
-				flakes[flakeKey].packages[attrName] = true
-			}
-		} else if flakeName != "" {
-			desc := firstNonEmpty(srcStr(src, "flake_description"), srcStr(src, "package_description"))
-			add(flakeName, &flakeEntry{name: flakeName, description: desc, packages: map[string]bool{}})
-			if attrName != "" {
-				flakes[flakeName].packages[attrName] = true
-			}
-		}
+		c.addHit(hit.Source)
 	}
 
 	var results []string
-	if total > int64(len(flakes)) {
-		results = append(results, fmt.Sprintf("Found %s matches (%d unique flakes) for '%s':\n", comma(total), len(flakes), query))
+	if total > int64(len(c.flakes)) {
+		results = append(results, fmt.Sprintf("Found %s matches (%d unique flakes) for '%s':\n", comma(total), len(c.flakes), query))
 	} else {
-		results = append(results, fmt.Sprintf("Found %d flakes matching '%s':\n", len(flakes), query))
+		results = append(results, fmt.Sprintf("Found %d flakes matching '%s':\n", len(c.flakes), query))
 	}
 
-	for _, key := range order {
-		f := flakes[key]
+	for _, key := range c.order {
+		f := c.flakes[key]
 		results = append(results, "* "+f.name)
 		if f.owner != "" && f.repo != "" {
 			results = append(results, "  Repository: "+f.owner+"/"+f.repo)
@@ -160,11 +160,11 @@ func searchFlakes(ctx context.Context, query string, limit int) string {
 }
 
 func statsFlakes(ctx context.Context) string {
-	total, err := esCount(ctx, flakeIndex, map[string]any{"term": map[string]any{"type": "package"}}, 10*time.Second)
+	total, err := esCount(ctx, flakeIndex, map[string]any{"term": map[string]any{"type": "package"}})
 	if err != nil {
 		return errMsg("Flake indices not found")
 	}
-	return fmt.Sprintf("NixOS Flakes Statistics:\n* Available packages: %s", comma(total))
+	return "NixOS Flakes Statistics:\n* Available packages: " + comma(total)
 }
 
 func firstNonEmpty(vals ...string) string {

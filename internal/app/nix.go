@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -110,10 +109,8 @@ func dispatchInfo(ctx context.Context, source, typ, query, channel string) strin
 	}
 	switch source {
 	case "flakes":
-		example, _ := json.Marshal(map[string]any{"action": "search", "source": "flakes", "query": query})
-		return errMsg(
-			fmt.Sprintf("action=info is not supported for source=flakes. Use action=search instead. Example: %s.", string(example)),
-		)
+		example := fmt.Sprintf(`{"action": "search", "source": "flakes", "query": %q}`, query)
+		return errMsg("action=info is not supported for source=flakes. Use action=search instead. Example: " + example + ".")
 	case "nixos":
 		switch typ {
 		case "package", "packages", "option", "options":

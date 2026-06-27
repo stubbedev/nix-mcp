@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,7 +46,24 @@ var knownSources = map[string]bool{
 	"noogle": true, "nixhub": true,
 }
 
-var httpClient = &http.Client{}
+// httpClient has no overall timeout — every request carries its own
+// context deadline — but the transport pools connections (so the concurrent
+// channel-discovery / cache-check bursts reuse TLS sessions instead of
+// re-handshaking per request) and bounds dial/TLS time so a half-open
+// connection can never hang a request past its context deadline.
+var httpClient = &http.Client{
+	Transport: &http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		DialContext:           (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		MaxIdleConnsPerHost:   100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		ResponseHeaderTimeout: 30 * time.Second,
+	},
+}
 
 // httpGet performs a GET and returns status + body, with a per-call timeout.
 func httpGet(
@@ -80,7 +98,7 @@ func httpGet(
 	if err != nil {
 		return 0, nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024))
 	return resp.StatusCode, body, err
 }
@@ -95,23 +113,6 @@ func getJSON(ctx context.Context, rawURL string, params, headers map[string]stri
 		return fmt.Errorf("HTTP %d", status)
 	}
 	return json.Unmarshal(body, out)
-}
-
-// headStatus issues a HEAD and returns the status code.
-func headStatus(ctx context.Context, rawURL string, timeout time.Duration) (int, error) {
-	ctx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, rawURL, nil)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("User-Agent", userAgent())
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	resp.Body.Close()
-	return resp.StatusCode, nil
 }
 
 // ── Elasticsearch (search.nixos.org) ─────────────────────────────────────────
@@ -131,7 +132,10 @@ type esResponse struct {
 }
 
 func esPost(ctx context.Context, index, action string, payload map[string]any, timeout time.Duration) (*esResponse, int, error) {
-	body, _ := json.Marshal(payload)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, 0, err
+	}
 	rawURL := fmt.Sprintf("%s/%s/%s", nixosAPI, index, action)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -146,7 +150,7 @@ func esPost(ctx context.Context, index, action string, payload map[string]any, t
 	if err != nil {
 		return nil, 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 64*1024*1024))
 	if err != nil {
 		return nil, resp.StatusCode, err
@@ -164,7 +168,7 @@ func esPost(ctx context.Context, index, action string, payload map[string]any, t
 func esQuery(ctx context.Context, index string, query map[string]any, size int) ([]esHit, error) {
 	resp, status, err := esPost(ctx, index, "_search", map[string]any{"query": query, "size": size}, 10*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("API error: %v", err)
+		return nil, fmt.Errorf("API error: %w", err)
 	}
 	if status < 200 || status >= 300 {
 		return nil, fmt.Errorf("API error: HTTP %d", status)
@@ -173,8 +177,8 @@ func esQuery(ctx context.Context, index string, query map[string]any, size int) 
 }
 
 // esCount runs a _count and returns the document count.
-func esCount(ctx context.Context, index string, query map[string]any, timeout time.Duration) (int64, error) {
-	resp, status, err := esPost(ctx, index, "_count", map[string]any{"query": query}, timeout)
+func esCount(ctx context.Context, index string, query map[string]any) (int64, error) {
+	resp, status, err := esPost(ctx, index, "_count", map[string]any{"query": query}, 10*time.Second)
 	if err != nil {
 		return 0, err
 	}

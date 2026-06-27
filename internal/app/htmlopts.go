@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -29,12 +30,7 @@ func nodeAttr(n *html.Node, key string) string {
 }
 
 func hasClass(n *html.Node, class string) bool {
-	for _, c := range strings.Fields(nodeAttr(n, "class")) {
-		if c == class {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(nodeAttr(n, "class")), class)
 }
 
 // rawText concatenates all descendant text.
@@ -163,14 +159,14 @@ func findSpanTerm(root *html.Node) *html.Node {
 func parseHTMLOptions(ctx context.Context, pageURL, query, prefix string, limit int) ([]htmlOption, error) {
 	status, body, err := httpGet(ctx, pageURL, nil, nil, 30*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch docs: %v", err)
+		return nil, fmt.Errorf("failed to fetch docs: %w", err)
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("Failed to fetch docs: HTTP %d", status)
+		return nil, fmt.Errorf("failed to fetch docs: HTTP %d", status)
 	}
 	doc, err := html.Parse(strings.NewReader(string(body)))
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch docs: %v", err)
+		return nil, fmt.Errorf("failed to fetch docs: %w", err)
 	}
 
 	isHM := strings.Contains(pageURL, "home-manager")
@@ -198,7 +194,7 @@ func parseHTMLOptions(ctx context.Context, pageURL, query, prefix string, limit 
 		if query != "" && !strings.Contains(strings.ToLower(name), strings.ToLower(query)) {
 			continue
 		}
-		if prefix != "" && !(strings.HasPrefix(name, prefix+".") || name == prefix) {
+		if prefix != "" && (!strings.HasPrefix(name, prefix+".") && name != prefix) {
 			continue
 		}
 
@@ -218,15 +214,11 @@ func parseHTMLOptions(ctx context.Context, pageURL, query, prefix string, limit 
 		typeInfo := ""
 		if term := findSpanTerm(dd); term != nil && strings.Contains(rawText(term), "Type:") {
 			typeInfo = strings.TrimSpace(strings.ReplaceAll(collapsedText(term), "Type:", ""))
-		} else {
-			ddText := rawText(dd)
-			if idx := strings.Index(ddText, "Type:"); idx >= 0 {
-				rest := ddText[idx+5:]
-				if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
-					rest = rest[:nl]
-				}
-				typeInfo = strings.TrimSpace(rest)
+		} else if _, rest, ok := strings.Cut(rawText(dd), "Type:"); ok {
+			if nl := strings.IndexByte(rest, '\n'); nl >= 0 {
+				rest = rest[:nl]
 			}
+			typeInfo = strings.TrimSpace(rest)
 		}
 
 		options = append(options, htmlOption{name: name, desc: truncate(description, 200), typ: typeInfo})
@@ -352,8 +344,7 @@ func browseHTMLSource(ctx context.Context, pageURL, label, prefix string) string
 	categories := map[string]int{}
 	for _, opt := range options {
 		name := opt.name
-		if name != "" && strings.Contains(name, ".") {
-			cat := name[:strings.Index(name, ".")]
+		if cat, _, ok := strings.Cut(name, "."); ok && name != "" {
 			if len(cat) > 1 && isIdentifier(cat) && cat == strings.ToLower(cat) {
 				categories[cat]++
 			}

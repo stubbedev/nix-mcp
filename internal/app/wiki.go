@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -26,7 +27,7 @@ func searchWiki(ctx context.Context, query string, limit int) string {
 	}
 	err := getJSON(ctx, wikiAPI, map[string]string{
 		"action": "query", "list": "search", "srsearch": normalized,
-		"format": "json", "utf8": "1", "srlimit": fmt.Sprint(limit),
+		"format": "json", "utf8": "1", "srlimit": strconv.Itoa(limit),
 	}, nil, 15*time.Second, &data)
 	if err != nil {
 		return errCode(apiErrCode(err), "Wiki API error: "+err.Error())

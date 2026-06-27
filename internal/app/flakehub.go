@@ -50,10 +50,7 @@ func searchFlakehub(ctx context.Context, query string, limit int) string {
 			results = append(results, "  "+truncate(strings.Join(strings.Fields(f.Description), " "), 200))
 		}
 		if len(f.Labels) > 0 {
-			n := len(f.Labels)
-			if n > 5 {
-				n = 5
-			}
+			n := min(len(f.Labels), 5)
 			results = append(results, "  Labels: "+strings.Join(f.Labels[:n], ", "))
 		}
 		results = append(results, fmt.Sprintf("  https://flakehub.com/flake/%s/%s", f.Org, f.Project))

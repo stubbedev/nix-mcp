@@ -127,38 +127,7 @@ func infoNixhub(ctx context.Context, name string) string {
 		version = "latest"
 	}
 
-	flakeRef := ""
-	storePaths := map[string]string{}
-	if resolve, status, _ := fetchNixhubResolve(ctx, name, version); status >= 200 && status < 300 && resolve != nil {
-		if systems := getMap(resolve, "systems"); systems != nil {
-			for sysName, v := range systems {
-				sysInfo, _ := v.(map[string]any)
-				if sysInfo == nil {
-					continue
-				}
-				if flakeRef == "" {
-					if fi := getMap(sysInfo, "flake_installable"); fi != nil {
-						ref := getMap(fi, "ref")
-						attrPath := srcStr(fi, "attr_path")
-						if ref != nil && srcStr(ref, "type") == "github" {
-							owner := srcStr(ref, "owner")
-							repo := srcStr(ref, "repo")
-							rev := srcStr(ref, "rev")
-							if len(rev) > 8 {
-								rev = rev[:8]
-							}
-							if owner != "" && repo != "" {
-								flakeRef = fmt.Sprintf("github:%s/%s/%s#%s", owner, repo, rev, attrPath)
-							}
-						}
-					}
-				}
-				if path := nixhubDefaultOutputPath(sysInfo); path != "" {
-					storePaths[sysName] = path
-				}
-			}
-		}
-	}
+	flakeRef, storePaths := nixhubResolveRefs(ctx, name, version)
 
 	results := []string{"Package: " + firstNonEmpty(srcStr(pkg, "name"), name)}
 	if version != "" {
@@ -227,6 +196,55 @@ func nixhubDefaultOutputPath(sysInfo map[string]any) string {
 		return srcStr(first, "path")
 	}
 	return ""
+}
+
+// nixhubResolveRefs fetches v2/resolve and extracts the flake reference and
+// per-system store paths. Failures (network/non-2xx) yield empty results.
+func nixhubResolveRefs(ctx context.Context, name, version string) (string, map[string]string) {
+	storePaths := map[string]string{}
+	resolve, status, _ := fetchNixhubResolve(ctx, name, version)
+	if status < 200 || status >= 300 || resolve == nil {
+		return "", storePaths
+	}
+	systems := getMap(resolve, "systems")
+	if systems == nil {
+		return "", storePaths
+	}
+	flakeRef := ""
+	for sysName, v := range systems {
+		sysInfo, _ := v.(map[string]any)
+		if sysInfo == nil {
+			continue
+		}
+		if flakeRef == "" {
+			flakeRef = nixhubFlakeRef(sysInfo)
+		}
+		if path := nixhubDefaultOutputPath(sysInfo); path != "" {
+			storePaths[sysName] = path
+		}
+	}
+	return flakeRef, storePaths
+}
+
+// nixhubFlakeRef builds a github:owner/repo/rev#attr ref from a system's
+// flake_installable, or "" when it isn't a github ref.
+func nixhubFlakeRef(sysInfo map[string]any) string {
+	fi := getMap(sysInfo, "flake_installable")
+	if fi == nil {
+		return ""
+	}
+	ref := getMap(fi, "ref")
+	if ref == nil || srcStr(ref, "type") != "github" {
+		return ""
+	}
+	owner, repo, rev := srcStr(ref, "owner"), srcStr(ref, "repo"), srcStr(ref, "rev")
+	if len(rev) > 8 {
+		rev = rev[:8]
+	}
+	if owner == "" || repo == "" {
+		return ""
+	}
+	return fmt.Sprintf("github:%s/%s/%s#%s", owner, repo, rev, srcStr(fi, "attr_path"))
 }
 
 // nixhubPrograms pulls the program list from a pkg's systems dict.
@@ -322,11 +340,9 @@ func checkBinaryCache(ctx context.Context, name, version, system string) string 
 	sysResults := make([][]string, len(systems))
 	var wg sync.WaitGroup
 	for i, s := range systems {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			sysResults[i] = checkSystemCache(ctx, s.name, s.storePath)
-		}()
+		})
 	}
 	wg.Wait()
 	for _, sr := range sysResults {
@@ -351,28 +367,24 @@ func checkSystemCache(ctx context.Context, sysName, storePath string) []string {
 		return append(results, "  Status: UNKNOWN (invalid store path)", "")
 	}
 
+	// One GET (not HEAD+GET): the narinfo body is small and gives us the sizes
+	// in the same round-trip, halving requests per system.
 	narURL := fmt.Sprintf("%s/%s.narinfo", cacheNixosOrg, storeHash)
-	status, err := headStatus(ctx, narURL, 5*time.Second)
-	if err != nil {
-		return append(results, "  Status: UNKNOWN (cache check failed)", "")
-	}
+	status, body, err := httpGet(ctx, narURL, nil, nil, 5*time.Second)
 	switch {
+	case err != nil:
+		results = append(results, "  Status: UNKNOWN (cache check failed)")
 	case status == 200:
-		gstatus, body, gerr := httpGet(ctx, narURL, nil, nil, 5*time.Second)
-		if gerr == nil && gstatus == 200 {
-			ni := parseNarInfo(string(body))
-			results = append(results, "  Status: CACHED")
-			if ni.hasFileSize {
-				results = append(results, "  Download size: "+formatSize(ni.fileSize))
-			}
-			if ni.hasNarSize {
-				results = append(results, "  Unpacked size: "+formatSize(ni.narSize))
-			}
-			if ni.compression != "" {
-				results = append(results, "  Compression: "+ni.compression)
-			}
-		} else {
-			results = append(results, "  Status: CACHED")
+		ni := parseNarInfo(string(body))
+		results = append(results, "  Status: CACHED")
+		if ni.hasFileSize {
+			results = append(results, "  Download size: "+formatSize(ni.fileSize))
+		}
+		if ni.hasNarSize {
+			results = append(results, "  Unpacked size: "+formatSize(ni.narSize))
+		}
+		if ni.compression != "" {
+			results = append(results, "  Compression: "+ni.compression)
 		}
 	case status == 404:
 		results = append(results, "  Status: NOT CACHED")
@@ -416,7 +428,7 @@ func formatRelease(release map[string]any) []string {
 	}
 	if len(platformSystems) > 0 {
 		hasLinux, hasDarwin := false, false
-		var all []string
+		all := make([]string, 0, len(platformSystems))
 		for s := range platformSystems {
 			all = append(all, s)
 			if strings.Contains(s, "linux") {

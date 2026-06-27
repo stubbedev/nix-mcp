@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -162,10 +163,7 @@ func searchNoogle(ctx context.Context, query string, limit int) string {
 			results = append(results, "  "+truncate(desc, 200))
 		}
 		if aliases := noogleAliases(m.doc); len(aliases) > 0 {
-			n := len(aliases)
-			if n > 3 {
-				n = 3
-			}
+			n := min(len(aliases), 3)
 			results = append(results, "  Aliases: "+strings.Join(aliases[:n], ", "))
 		}
 		results = append(results, "")
@@ -218,7 +216,10 @@ func infoNoogle(ctx context.Context, name string) string {
 		return errCode("NOT_FOUND", fmt.Sprintf("Function '%s' not found. Similar: %s", name, strings.Join(sugg, ", ")))
 	}
 
-	doc := exact
+	return formatNoogleDoc(exact)
+}
+
+func formatNoogleDoc(doc map[string]any) string {
 	path := noogleFunctionPath(doc)
 	meta := getMap(doc, "meta")
 	content := getMap(doc, "content")
@@ -231,20 +232,8 @@ func infoNoogle(ctx context.Context, name string) string {
 	if aliases := noogleAliases(doc); len(aliases) > 0 {
 		results = append(results, "Aliases: "+strings.Join(aliases, ", "))
 	}
-	if meta != nil {
-		if primop := getMap(meta, "primop_meta"); primop != nil {
-			if arity, ok := primop["arity"]; ok && arity != nil {
-				var args []string
-				for _, a := range getList(primop, "args") {
-					args = append(args, fmt.Sprint(a))
-				}
-				if len(args) > 0 {
-					results = append(results, fmt.Sprintf("Primop: Yes (arity: %s, args: %s)", fmtNum(arity), strings.Join(args, ", ")))
-				} else {
-					results = append(results, fmt.Sprintf("Primop: Yes (arity: %s)", fmtNum(arity)))
-				}
-			}
-		}
+	if line := nooglePrimopLine(meta); line != "" {
+		results = append(results, line)
 	}
 	results = append(results, "")
 	if desc := noogleDescription(doc); desc != "" {
@@ -255,19 +244,44 @@ func infoNoogle(ctx context.Context, name string) string {
 			results = append(results, "Example:", truncate(stripHTML(ex), 500), "")
 		}
 	}
-	if meta != nil {
-		if pos := getMap(meta, "position"); pos != nil {
-			file, _ := pos["file"].(string)
-			if file != "" {
-				if line, ok := pos["line"]; ok && line != nil {
-					results = append(results, fmt.Sprintf("Source: %s:%s", file, fmtNum(line)))
-				} else {
-					results = append(results, "Source: "+file)
-				}
-			}
-		}
+	if line := nooglePositionLine(meta); line != "" {
+		results = append(results, line)
 	}
 	return strings.TrimSpace(strings.Join(results, "\n"))
+}
+
+func nooglePrimopLine(meta map[string]any) string {
+	primop := getMap(meta, "primop_meta")
+	if primop == nil {
+		return ""
+	}
+	arity, ok := primop["arity"]
+	if !ok || arity == nil {
+		return ""
+	}
+	var args []string
+	for _, a := range getList(primop, "args") {
+		args = append(args, fmt.Sprint(a))
+	}
+	if len(args) > 0 {
+		return fmt.Sprintf("Primop: Yes (arity: %s, args: %s)", fmtNum(arity), strings.Join(args, ", "))
+	}
+	return fmt.Sprintf("Primop: Yes (arity: %s)", fmtNum(arity))
+}
+
+func nooglePositionLine(meta map[string]any) string {
+	pos := getMap(meta, "position")
+	if pos == nil {
+		return ""
+	}
+	file, _ := pos["file"].(string)
+	if file == "" {
+		return ""
+	}
+	if line, ok := pos["line"]; ok && line != nil {
+		return fmt.Sprintf("Source: %s:%s", file, fmtNum(line))
+	}
+	return "Source: " + file
 }
 
 func statsNoogle(ctx context.Context) string {
@@ -378,7 +392,7 @@ func fmtNum(v any) string {
 	switch n := v.(type) {
 	case float64:
 		if n == float64(int64(n)) {
-			return fmt.Sprintf("%d", int64(n))
+			return strconv.FormatInt(int64(n), 10)
 		}
 		return fmt.Sprintf("%v", n)
 	default:

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,9 +74,7 @@ func flattenInputs(data *flakeArchive, prefix string) map[string]string {
 		}
 		if len(info.Inputs) > 0 {
 			child := info
-			for k, v := range flattenInputs(&child, full) {
-				result[k] = v
-			}
+			maps.Copy(result, flattenInputs(&child, full))
 		}
 	}
 	return result
@@ -132,9 +131,9 @@ func flakeInputsLs(ctx context.Context, flakeDir, query string) string {
 		return errCode("NIX_NOT_FOUND", "Nix is not installed or not in PATH")
 	}
 	inputName, subpath := query, ""
-	if i := strings.Index(query, ":"); i >= 0 {
-		inputName = query[:i]
-		subpath = strings.TrimLeft(query[i+1:], "/")
+	if before, after, ok0 := strings.Cut(query, ":"); ok0 {
+		inputName = before
+		subpath = strings.TrimLeft(after, "/")
 	}
 	data, errMsgStr := getFlakeInputs(ctx, flakeDir)
 	if errMsgStr != "" {
@@ -191,11 +190,11 @@ func flakeInputsRead(ctx context.Context, flakeDir, query string, limit int) str
 	if !checkNixAvailable() {
 		return errCode("NIX_NOT_FOUND", "Nix is not installed or not in PATH")
 	}
-	if !strings.Contains(query, ":") {
+	inputName, rawPath, ok := strings.Cut(query, ":")
+	if !ok {
 		return errCode("INVALID_FORMAT", "Read requires 'input:path' format (e.g., 'nixpkgs:flake.nix')")
 	}
-	inputName := query[:strings.Index(query, ":")]
-	filePath := strings.TrimLeft(query[strings.Index(query, ":")+1:], "/")
+	filePath := strings.TrimLeft(rawPath, "/")
 	if filePath == "" {
 		return errCode("INVALID_FORMAT", "File path required (e.g., 'nixpkgs:flake.nix')")
 	}

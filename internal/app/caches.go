@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -44,21 +45,24 @@ func loadNixvim(ctx context.Context) ([]map[string]any, error) {
 		url := fmt.Sprintf("%s/%d.json", nixvimMetaBase, chunk)
 		status, body, err := httpGet(ctx, url, nil, nil, 30*time.Second)
 		if err != nil {
-			return nil, fmt.Errorf("Failed to fetch Nixvim options: %v", err)
+			return nil, fmt.Errorf("failed to fetch Nixvim options: %w", err)
 		}
 		if status == 404 {
 			break
 		}
 		if status < 200 || status >= 300 {
-			return nil, fmt.Errorf("Failed to fetch Nixvim options: HTTP %d", status)
+			return nil, fmt.Errorf("failed to fetch Nixvim options: HTTP %d", status)
 		}
 		var part []map[string]any
-		if err := json.Unmarshal(body, &part); err != nil {
+		if json.Unmarshal(body, &part) != nil {
 			break // unexpected format ends pagination, matching Python
 		}
 		all = append(all, part...)
 	}
-	return all, nil
+	// A malformed chunk ends pagination and we return the pages gathered so far
+	// (matching the Python implementation) — the parse error is intentionally
+	// not propagated.
+	return all, nil //nolint:nilerr // partial pages on a malformed chunk are deliberate
 }
 
 // ── Noogle data ──────────────────────────────────────────────────────────────
@@ -68,16 +72,16 @@ var noogleCache = &memo[[]map[string]any]{loader: loadNoogle}
 func loadNoogle(ctx context.Context) ([]map[string]any, error) {
 	status, body, err := httpGet(ctx, noogleAPI, nil, nil, 60*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch Noogle data: %v", err)
+		return nil, fmt.Errorf("failed to fetch Noogle data: %w", err)
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("Failed to fetch Noogle data: HTTP %d", status)
+		return nil, fmt.Errorf("failed to fetch Noogle data: HTTP %d", status)
 	}
 	var payload struct {
 		Data []map[string]any `json:"data"`
 	}
 	if err := json.Unmarshal(body, &payload); err != nil {
-		return nil, fmt.Errorf("Failed to parse Noogle data: %v", err)
+		return nil, fmt.Errorf("failed to parse Noogle data: %w", err)
 	}
 	return payload.Data, nil
 }
@@ -95,15 +99,15 @@ var nixdevCache = &memo[*nixdevIndex]{loader: loadNixdev}
 func loadNixdev(ctx context.Context) (*nixdevIndex, error) {
 	status, body, err := httpGet(ctx, nixdevIndexURL, nil, nil, 30*time.Second)
 	if err != nil {
-		return nil, fmt.Errorf("Failed to fetch nix.dev index: %v", err)
+		return nil, fmt.Errorf("failed to fetch nix.dev index: %w", err)
 	}
 	if status < 200 || status >= 300 {
-		return nil, fmt.Errorf("Failed to fetch nix.dev index: HTTP %d", status)
+		return nil, fmt.Errorf("failed to fetch nix.dev index: HTTP %d", status)
 	}
 	content := strings.TrimSpace(string(body))
 	const prefix = "Search.setIndex("
 	if !strings.HasPrefix(content, prefix) {
-		return nil, fmt.Errorf("Failed to parse nix.dev index: unexpected format")
+		return nil, errors.New("failed to parse nix.dev index: unexpected format")
 	}
 	jsonStr := strings.TrimSuffix(strings.TrimSpace(content[len(prefix):]), ")")
 	// The Sphinx index uses a flexible "terms" shape: doc id list may be an int
@@ -114,7 +118,7 @@ func loadNixdev(ctx context.Context) (*nixdevIndex, error) {
 		Terms    map[string]json.RawMessage `json:"terms"`
 	}
 	if err := json.Unmarshal([]byte(jsonStr), &raw); err != nil {
-		return nil, fmt.Errorf("Failed to parse nix.dev index: %v", err)
+		return nil, fmt.Errorf("failed to parse nix.dev index: %w", err)
 	}
 	idx := &nixdevIndex{Docnames: raw.Docnames, Titles: raw.Titles, Terms: map[string][]int{}}
 	for term, rm := range raw.Terms {

@@ -84,10 +84,7 @@ func storeLs(_ context.Context, query string, limit int) string {
 	if len(shownDirs) > limit {
 		shownDirs = shownDirs[:limit]
 	}
-	remaining := limit - len(shownDirs)
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(limit-len(shownDirs), 0)
 	shownFiles := files
 	if len(shownFiles) > remaining {
 		shownFiles = shownFiles[:remaining]

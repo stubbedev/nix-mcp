@@ -7,10 +7,26 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/net/html"
 )
+
+// safeGo runs fn in a goroutine that cannot crash the process: any panic is
+// recovered and logged, and the WaitGroup is always signaled. Use this for
+// every goroutine — an unrecovered panic in a bare goroutine takes the whole
+// server down, since recover() only catches panics in its own goroutine.
+func safeGo(wg *sync.WaitGroup, fn func()) {
+	wg.Go(func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logf("recovered panic in goroutine: %v", r)
+			}
+		}()
+		fn()
+	})
+}
 
 // parseISOTime parses an ISO-8601 timestamp (mirrors Python's
 // datetime.fromisoformat after normalizing a trailing Z).
@@ -88,7 +104,7 @@ type narInfo struct {
 
 func parseNarInfo(text string) narInfo {
 	var r narInfo
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		k, v, ok := strings.Cut(line, ":")
 		if !ok {
 			continue
@@ -120,13 +136,13 @@ func parseNarInfo(text string) narInfo {
 // validateStorePath resolves symlinks/relative components and confirms the
 // path stays under /nix/store/ (matches _validate_store_path).
 func validateStorePath(path string) bool {
-	real, err := filepath.EvalSymlinks(path)
+	resolved, err := filepath.EvalSymlinks(path)
 	if err != nil {
 		// EvalSymlinks fails if the path doesn't exist; fall back to a lexical
 		// clean so callers can still reject traversal before stat.
-		real = filepath.Clean(path)
+		resolved = filepath.Clean(path)
 	}
-	return strings.HasPrefix(real, "/nix/store/")
+	return strings.HasPrefix(resolved, "/nix/store/")
 }
 
 func isBinaryFile(path string) bool {
@@ -134,7 +150,7 @@ func isBinaryFile(path string) bool {
 	if err != nil {
 		return true
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	buf := make([]byte, 8192)
 	n, _ := f.Read(buf)
 	return bytes.IndexByte(buf[:n], 0) >= 0
