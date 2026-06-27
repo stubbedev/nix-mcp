@@ -80,7 +80,7 @@ func dispatchSearch(ctx context.Context, source, typ, query string, limit int, c
 		}
 		return searchNixOS(ctx, query, typ, limit, channel)
 	case "home-manager":
-		return searchHTMLSource(ctx, homeManagerURL, "Home Manager", query, limit)
+		return hmUnavailable()
 	case "darwin":
 		return searchHTMLSource(ctx, darwinURL, "nix-darwin", query, limit)
 	case "flakes":
@@ -88,7 +88,7 @@ func dispatchSearch(ctx context.Context, source, typ, query string, limit int, c
 	case "flakehub":
 		return searchFlakehub(ctx, query, limit)
 	case "nixvim":
-		return searchNixvim(ctx, query, limit)
+		return nixvimUnavailable()
 	case "wiki":
 		return searchWiki(ctx, query, limit)
 	case "nix-dev":
@@ -124,13 +124,13 @@ func dispatchInfo(ctx context.Context, source, typ, query, channel string) strin
 		}
 		return infoNixOS(ctx, query, infoType, channel)
 	case "home-manager":
-		return infoHTMLSource(ctx, homeManagerURL, query)
+		return hmUnavailable()
 	case "darwin":
 		return infoHTMLSource(ctx, darwinURL, query)
 	case "flakehub":
 		return infoFlakehub(ctx, query)
 	case "nixvim":
-		return infoNixvim(ctx, query)
+		return nixvimUnavailable()
 	case "wiki":
 		return infoWiki(ctx, query)
 	case "nix-dev":
@@ -150,7 +150,7 @@ func dispatchStats(ctx context.Context, source, channel string) string {
 	case "nixos":
 		return statsNixOS(ctx, channel)
 	case "home-manager":
-		return statsHTMLSource(ctx, homeManagerURL, "Home Manager", 5000)
+		return hmUnavailable()
 	case "darwin":
 		return statsHTMLSource(ctx, darwinURL, "nix-darwin", 3000)
 	case "flakes":
@@ -158,7 +158,7 @@ func dispatchStats(ctx context.Context, source, channel string) string {
 	case "flakehub":
 		return statsFlakehub(ctx)
 	case "nixvim":
-		return statsNixvim(ctx)
+		return nixvimUnavailable()
 	case "noogle":
 		return statsNoogle(ctx)
 	case "wiki", "nix-dev", "nixhub":
@@ -177,11 +177,11 @@ func dispatchBrowse(ctx context.Context, source, query string) string {
 			"To get a specific option's details, use: " +
 			`{"action": "info", "query": "services.nginx.enable", "type": "option"}.`)
 	case "home-manager":
-		return browseHTMLSource(ctx, homeManagerURL, "Home Manager", query)
+		return hmUnavailable()
 	case "darwin":
 		return browseHTMLSource(ctx, darwinURL, "nix-darwin", query)
 	case "nixvim":
-		return browseNixvim(ctx, query)
+		return nixvimUnavailable()
 	case "noogle":
 		return browseNoogle(ctx, query)
 	default:
@@ -253,4 +253,21 @@ func dispatchStore(ctx context.Context, typ, query string, limit int) string {
 		return storeLs(ctx, query, effLimit)
 	}
 	return storeRead(ctx, query, effLimit)
+}
+
+// hmUnavailable / nixvimUnavailable explain why these two sources can't be
+// queried: their upstreams replaced the scrapeable docs with formats that have
+// no bulk/queryable endpoint (mdBook paginated HTML / a binary WASM-decoded
+// index). A clear message beats a misleading "no options found".
+func hmUnavailable() string {
+	return errCode("UNAVAILABLE",
+		"Home Manager option search is unavailable: upstream replaced its single options page "+
+			"with paginated mdBook pages that expose no bulk index. Browse the manual at "+
+			homeManagerURL+" , or use source=nixos for packages.")
+}
+
+func nixvimUnavailable() string {
+	return errCode("UNAVAILABLE",
+		"Nixvim option search is unavailable: upstream switched to a binary, WASM-decoded search "+
+			"index with no queryable JSON/API. Browse https://nix-community.github.io/nixvim/search/ instead.")
 }

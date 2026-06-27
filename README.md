@@ -100,6 +100,19 @@ Two tools are exposed (no gating — both are always available):
 - **`nix_versions`** — package version history from NixHub (which nixpkgs
   commit shipped version X, attribute path, platforms, dates).
 
+### Source status
+
+Improvements over the upstream `mcp-nixos` (whose scrapers for these had broken):
+
+- **flakes** — the search index generation (`latest-N-group-manual`) is now
+  discovered at runtime instead of hardcoded, so flake search/stats work again
+  (upstream's index data is currently sparse, but the query is correct).
+- **home-manager** / **nixvim** — these upstreams replaced their scrapeable docs
+  with formats that expose no bulk/queryable endpoint (paginated mdBook HTML /
+  a binary WASM-decoded index). These sources return a clear "unavailable"
+  message instead of silently empty results. **nixos** and **darwin** option
+  search are unaffected and work.
+
 ## Development
 
 ```sh

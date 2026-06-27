@@ -35,36 +35,6 @@ func (m *memo[T]) get(ctx context.Context) (T, error) {
 	return v, nil
 }
 
-// ── Nixvim options (NuschtOS meta JSON chunks) ───────────────────────────────
-
-var nixvimCache = &memo[[]map[string]any]{loader: loadNixvim}
-
-func loadNixvim(ctx context.Context) ([]map[string]any, error) {
-	var all []map[string]any
-	for chunk := 0; ; chunk++ {
-		url := fmt.Sprintf("%s/%d.json", nixvimMetaBase, chunk)
-		status, body, err := httpGet(ctx, url, nil, nil, 30*time.Second)
-		if err != nil {
-			return nil, fmt.Errorf("failed to fetch Nixvim options: %w", err)
-		}
-		if status == 404 {
-			break
-		}
-		if status < 200 || status >= 300 {
-			return nil, fmt.Errorf("failed to fetch Nixvim options: HTTP %d", status)
-		}
-		var part []map[string]any
-		if json.Unmarshal(body, &part) != nil {
-			break // unexpected format ends pagination, matching Python
-		}
-		all = append(all, part...)
-	}
-	// A malformed chunk ends pagination and we return the pages gathered so far
-	// (matching the Python implementation) — the parse error is intentionally
-	// not propagated.
-	return all, nil //nolint:nilerr // partial pages on a malformed chunk are deliberate
-}
-
 // ── Noogle data ──────────────────────────────────────────────────────────────
 
 var noogleCache = &memo[[]map[string]any]{loader: loadNoogle}

@@ -2,11 +2,43 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// flakeIndexCache discovers the current flake search index. The generation
+// number in `latest-<N>-group-manual` bumps whenever search.nixos.org changes
+// its schema (it was 44, is 48 as of this writing), so a hardcoded value goes
+// stale — probe a range once and pin the highest live generation.
+var flakeIndexCache = &memo[string]{loader: discoverFlakeIndex}
+
+func discoverFlakeIndex(ctx context.Context) (string, error) {
+	const lo, hi = 44, 64
+	var mu sync.Mutex
+	best := -1
+	var wg sync.WaitGroup
+	for n := lo; n <= hi; n++ {
+		idx := fmt.Sprintf("latest-%d-group-manual", n)
+		safeGo(&wg, func() {
+			if c, err := esCount(ctx, idx, map[string]any{"term": map[string]any{"type": "package"}}); err == nil && c > 0 {
+				mu.Lock()
+				if n > best {
+					best = n
+				}
+				mu.Unlock()
+			}
+		})
+	}
+	wg.Wait()
+	if best < 0 {
+		return "", errors.New("no flake index found")
+	}
+	return fmt.Sprintf("latest-%d-group-manual", best), nil
+}
 
 type flakeEntry struct {
 	name        string
@@ -97,11 +129,16 @@ func searchFlakes(ctx context.Context, query string, limit int) string {
 		}}
 	}
 
+	idx, err := flakeIndexCache.get(ctx)
+	if err != nil {
+		return errMsg("Flake indices not found. Flake search may be temporarily unavailable.")
+	}
+
 	searchQuery := map[string]any{"bool": map[string]any{
 		"filter": []any{map[string]any{"term": map[string]any{"type": "package"}}},
 		"must":   []any{q},
 	}}
-	resp, status, err := esPost(ctx, flakeIndex, "_search",
+	resp, status, err := esPost(ctx, idx, "_search",
 		map[string]any{"query": searchQuery, "size": limit * 5, "track_total_hits": true}, 10*time.Second)
 	if err != nil {
 		return errMsg(err.Error())
@@ -160,7 +197,11 @@ func searchFlakes(ctx context.Context, query string, limit int) string {
 }
 
 func statsFlakes(ctx context.Context) string {
-	total, err := esCount(ctx, flakeIndex, map[string]any{"term": map[string]any{"type": "package"}})
+	idx, err := flakeIndexCache.get(ctx)
+	if err != nil {
+		return errMsg("Flake indices not found")
+	}
+	total, err := esCount(ctx, idx, map[string]any{"term": map[string]any{"type": "package"}})
 	if err != nil {
 		return errMsg("Flake indices not found")
 	}
