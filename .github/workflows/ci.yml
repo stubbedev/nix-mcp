@@ -1,0 +1,140 @@
+name: ci
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: go build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build ./...
+      - run: go vet ./...
+      - run: go test ./...
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: install golangci-lint
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
+            | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: install just
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
+            | bash -s -- --to "$(go env GOPATH)/bin"
+      - name: just lint-check
+        run: just lint-check
+
+  nix:
+    name: nix flake check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # need a real ref + write token so the auto-bump step can push the
+          # refreshed vendorHash back to master.
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - uses: DeterminateSystems/nix-installer-action@v22
+      - uses: DeterminateSystems/magic-nix-cache-action@v14
+
+      # Inline `just sync-flake`. Rewrites flake.nix's vendorHash to match the
+      # current go.sum. On master pushes the result is auto-committed; on PRs we
+      # fail if it would change anything, so reviewers see the drift.
+      - name: sync flake.nix vendorHash
+        run: |
+          set -euo pipefail
+          GO_SUM_HASH=$(sha256sum go.sum | awk '{print $1}')
+          SENTINEL="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+          sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$SENTINEL"'";|' flake.nix
+          set +e
+          OUT=$(nix build .#nix-mcp --no-link 2>&1)
+          BUILD_STATUS=$?
+          set -e
+          NEW_HASH=$(printf '%s\n' "$OUT" | awk '/got:[[:space:]]*sha256-/ {print $2; exit}')
+          if [ -z "$NEW_HASH" ]; then
+            if [ "$BUILD_STATUS" = "0" ]; then
+              echo "::error::sync-flake: nix build unexpectedly succeeded with sentinel hash"
+              echo "$OUT"
+              exit 1
+            fi
+            echo "$OUT"
+            echo "::error::sync-flake: nix build did not print 'got: sha256-…'"
+            exit 1
+          fi
+          sed -i -E 's|^(\s*vendorHash = )"sha256-[^"]*";|\1"'"$NEW_HASH"'";|' flake.nix
+          if grep -q '^[[:space:]]*# go-sum:' flake.nix; then
+            sed -i -E 's|^(\s*# go-sum:).*|\1 '"$GO_SUM_HASH"'|' flake.nix
+          else
+            sed -i -E 's|^(\s*vendorHash = )|          # go-sum: '"$GO_SUM_HASH"'\n\1|' flake.nix
+          fi
+          echo "sync-flake: vendorHash=$NEW_HASH go-sum=$GO_SUM_HASH"
+
+      - name: assert flake.nix in sync (PR)
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ -n "$(git status --porcelain flake.nix)" ]; then
+            echo "::error::flake.nix vendorHash is out of sync with go.sum. Run 'just sync-flake' locally and commit the result."
+            git --no-pager diff flake.nix
+            exit 1
+          fi
+
+      - name: auto-commit flake.nix bump (master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        run: |
+          if [ -z "$(git status --porcelain flake.nix)" ]; then
+            echo "flake.nix already in sync; nothing to commit."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add flake.nix
+          git commit -m 'chore: auto-bump flake.nix vendorHash [skip ci]'
+          git push origin HEAD:master
+
+      - run: nix flake check --print-build-logs
+
+      # Push the built package closure to the self-hosted attic cache on master
+      # pushes, so `nix run`/flake consumers pull a prebuilt binary. Best-effort.
+      - name: push nix build to attic (master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        continue-on-error: true
+        env:
+          ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
+        run: |
+          OUT=$(nix build .#nix-mcp --no-link --print-out-paths)
+          nix run nixpkgs#attic-client -- login stubbe https://nix.stubbe.dev "$ATTIC_TOKEN"
+          for attempt in 1 2 3; do
+            if nix run nixpkgs#attic-client -- push default $OUT; then
+              exit 0
+            fi
+            echo "::warning::attic push attempt $attempt failed; retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+          echo "::warning::attic push failed after 3 attempts; cache push is best-effort, continuing"

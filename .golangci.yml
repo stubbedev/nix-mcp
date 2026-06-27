@@ -1,0 +1,150 @@
+version: "2"
+
+# Strict-but-sane lint config. Philosophy:
+#   - `default: all` then disable only linters that fight this codebase's
+#     deliberate idioms, are pure formatting opinion, or are redundant.
+#   - Real bug/quality linters are ON and the tree is clean against them.
+#   - Formatting (imports, gofumpt, long-line wrapping) is delegated to the
+#     `formatters` block below and applied with `golangci-lint fmt`, which is
+#     wired into `just fmt`, the pre-commit hook, and CI so it ALWAYS runs.
+#   - Complexity gates (cyclop/gocognit/funlen/nestif) are enforced; ratchet
+#     the thresholds down over time as functions are simplified.
+#
+# Run:   golangci-lint run            (lint gate)
+# Fix:   golangci-lint fmt            (apply formatters)
+
+linters:
+  default: all
+  disable:
+    # Whitespace/blank-line reformatters — not adopted (the formatters block
+    # below is the auto-applied formatter stack we do enforce).
+    - wsl
+    - wsl_v5
+    - nlreturn
+    - whitespace
+    # Anti-idiomatic for this codebase's deliberate style.
+    - noinlineerr
+    - exhaustruct
+    - nonamedreturns
+    - err113
+    - wrapcheck
+    - varnamelen
+    - ireturn
+    - gocyclo      # cyclop covers cyclomatic complexity
+    - maintidx     # overlaps cyclop/gocognit
+    - lll          # golines (formatter) enforces line length instead
+    # Heavy-config / convention linters with low bug value here.
+    - depguard
+    - tagliatelle
+    - mnd
+    - paralleltest
+    - testpackage
+    - gochecknoglobals
+    - gochecknoinits
+    - godox
+    - forbidigo
+    - tagalign
+    - godot
+    - godoclint
+    - musttag
+    - contextcheck
+    - containedctx
+    - dupl
+    - gosmopolitan
+    - gomodguard   # deprecated alias of gomodguard_v2; we don't gate modules
+    - gomodguard_v2 # no module allow/block list configured — nothing to enforce
+    # Opinionated style we intentionally don't adopt.
+    - nilnil          # (nil, nil) is the codebase's "not found" idiom
+    - funcorder       # method/ctor ordering is not enforced here
+    - goprintffuncname # UI helpers (Warn/Info/OK) are a deliberate concise API
+    - goconst         # canonical engine names already live in internal/engine;
+                      # the rest (struct tags, JSON keys, flag names) can't be consts
+    - recvcheck       # config types legitimately mix value getters/validate() with
+                      # the pointer UnmarshalYAML the YAML decoder requires
+    - embeddedstructfieldcheck # config structs deliberately list the inline
+                      # ContainerRef embed last, after the named YAML fields
+
+  settings:
+    errcheck:
+      check-type-assertions: false
+      check-blank: false
+    gosec:
+      # This tool's job is to read/write user-chosen paths and run git/docker;
+      # the taint/perms rules below fire on every such call. Inputs are
+      # validated/quoted at use sites. The non-excluded gosec rules stay on.
+      excludes:
+        - G304  # file path from variable — this tool reads/writes user-chosen paths
+        - G703  # path traversal (taint) — same; inputs are validated at use sites
+        - G204  # subprocess from variable — this tool runs git/docker by design
+        - G702  # command injection (taint) — same; args are validated/quoted
+        - G306  # WriteFile 0644 — worktree files/logs are meant to be user-readable
+        - G301  # dir 0755 — same
+        - G302  # chmod 0644 — same
+        - G101  # "password in URL" — runtime-built connection strings, not secrets
+        - G118  # shutdown goroutine uses Background ctx by design (outlives request)
+    exhaustive:
+      default-signifies-exhaustive: true
+    cyclop:
+      max-complexity: 20
+    gocognit:
+      min-complexity: 40
+    funlen:
+      lines: 120
+      statements: 80
+    nestif:
+      min-complexity: 8
+    revive:
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: error-return
+        - name: error-naming
+        # error-strings intentionally omitted: this server surfaces errors as
+        # user-facing sentences (capitalized, punctuated) read by the LLM.
+        - name: errorf
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+
+  exclusions:
+    rules:
+      # exec.Command / net.Listen without context is fine in short-lived tests.
+      - path: (_test\.go|e2e/)
+        linters:
+          - noctx
+      # Table-driven test data tables are legitimately long; funlen's line
+      # count penalizes the data, not real logic complexity.
+      - path: _test\.go
+        linters:
+          - funlen
+      # Test SQL literals exercise the read-only guard / rebind; the SELECT *
+      # style check is irrelevant to them.
+      - path: _test\.go
+        linters:
+          - unqueryvet
+
+formatters:
+  enable:
+    - gofumpt
+    - goimports
+    - golines
+  settings:
+    golines:
+      max-len: 140
+    goimports:
+      local-prefixes:
+        - github.com/stubbedev/nix-mcp
+
+issues:
+  # Report every finding, not golangci-lint's default capped subset, so a
+  # regression can't hide behind the per-linter / per-message cap.
+  max-issues-per-linter: 0
+  max-same-issues: 0

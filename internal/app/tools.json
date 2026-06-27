@@ -1,0 +1,77 @@
+[
+  {
+    "name": "nix",
+    "description": "Query NixOS, Home Manager, Darwin, FlakeHub, flakes, Nixvim, Wiki, nix.dev, Noogle, NixHub.\n\nUse this tool for anything touching nixpkgs, Nix channels, flakes, NixOS / home-manager / darwin options, the binary cache, or /nix/store paths — even when you think you know the answer. Your training data lags nixpkgs by months. Prefer this over `nix search`, scraping search.nixos.org, or running `gh api` against NixOS/nixpkgs.\n\nINTENTS → CALLS (copy the JSON shape exactly):\n  \"is package X in channel Y?\"        → {\"action\": \"info\", \"query\": \"X\", \"channel\": \"Y\"}\n  \"search for package X\"              → {\"action\": \"search\", \"query\": \"X\"}\n  \"which channels are available?\"     → {\"action\": \"channels\"}\n  \"search NixOS options for X\"        → {\"action\": \"search\", \"query\": \"X\", \"type\": \"options\"}\n  \"get option details for X\"          → {\"action\": \"info\", \"query\": \"X\", \"type\": \"option\"}\n  \"home-manager option for X\"         → {\"action\": \"search\", \"query\": \"X\", \"source\": \"home-manager\"}\n  \"darwin option for X\"               → {\"action\": \"search\", \"query\": \"X\", \"source\": \"darwin\"}\n  \"nixvim option for X\"               → {\"action\": \"search\", \"query\": \"X\", \"source\": \"nixvim\"}\n  \"what programs does pkg X provide?\" → {\"action\": \"search\", \"query\": \"X\", \"type\": \"programs\"}\n  \"count packages/options\"            → {\"action\": \"stats\"}\n  \"browse hm option tree under P\"     → {\"action\": \"browse\", \"query\": \"P\", \"source\": \"home-manager\"}\n  \"does X have a binary cache?\"       → {\"action\": \"cache\", \"query\": \"X\"}\n  \"search the NixOS wiki for X\"       → {\"action\": \"search\", \"query\": \"X\", \"source\": \"wiki\"}\n  \"search nix.dev docs\"               → {\"action\": \"search\", \"query\": \"X\", \"source\": \"nix-dev\"}\n  \"read a nix.dev page\"               → {\"action\": \"info\", \"query\": \"tutorials/nix-language\", \"source\": \"nix-dev\"}\n  \"list inputs of current flake\"      → {\"action\": \"flake-inputs\"}\n  \"ls inside flake input X\"           → {\"action\": \"flake-inputs\", \"type\": \"ls\", \"query\": \"X\"}\n  \"read /nix/store/... file\"          → {\"action\": \"store\", \"type\": \"read\", \"query\": \"/nix/store/...\"}\n  \"ls /nix/store/... dir\"             → {\"action\": \"store\", \"type\": \"ls\",   \"query\": \"/nix/store/...\"}\n\nFor package version *history* use the separate `nix_versions` tool. To search NixOS *options* use action=search with type=options (action=browse is only for home-manager/darwin/nixvim/noogle).",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": {
+          "type": "string",
+          "description": "One of: search, info, stats, browse, channels, flake-inputs, cache, store. Use 'search' for keyword lookup, 'info' for details about a specific name, 'browse' to walk an option hierarchy by prefix (home-manager/darwin/nixvim/noogle only). 'store' reads files or lists directories at an explicit /nix/store/ path."
+        },
+        "query": {
+          "type": "string",
+          "default": "",
+          "description": "Search term for 'search', exact name for 'info', prefix path for 'browse'. For flake-inputs: input_name or input:path. For store: absolute /nix/store/ path. Leave empty for 'stats'/'channels'."
+        },
+        "source": {
+          "type": "string",
+          "default": "nixos",
+          "description": "Data source for search/info/stats/browse/cache. One of: nixos (default), home-manager, darwin, flakes, flakehub, nixvim, wiki, nix-dev, noogle, nixhub. For action=flake-inputs, this may instead be a path to a flake directory; omit/default to use the current project. Ignored by action=store."
+        },
+        "type": {
+          "type": "string",
+          "default": "packages",
+          "description": "Sub-type of query. For source=nixos with action=search, one of: packages, options, programs, flakes. For source=nixos with action=info, one of: package, option. For flake-inputs, one of: list, ls, read. For store, one of: ls, read. Ignored by most other sources."
+        },
+        "channel": {
+          "type": "string",
+          "default": "unstable",
+          "description": "NixOS channel: unstable (default), stable, or a release like 25.05."
+        },
+        "limit": {
+          "type": "integer",
+          "default": 20,
+          "description": "Max results. 1-100 (or 1-2000 for flake-inputs/store read)."
+        },
+        "version": {
+          "type": "string",
+          "default": "latest",
+          "description": "Only used by action=cache. Package version (default: latest)."
+        },
+        "system": {
+          "type": "string",
+          "default": "",
+          "description": "Only used by action=cache. System arch e.g. x86_64-linux. Empty for all."
+        }
+      }
+    }
+  },
+  {
+    "name": "nix_versions",
+    "description": "Get package version history from NixHub.io (which nixpkgs commit shipped version X, attribute path, platforms, dates).",
+    "inputSchema": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package"],
+      "properties": {
+        "package": {
+          "type": "string",
+          "description": "Package name"
+        },
+        "version": {
+          "type": "string",
+          "default": "",
+          "description": "Specific version to find"
+        },
+        "limit": {
+          "type": "integer",
+          "default": 10,
+          "description": "1-50"
+        }
+      }
+    }
+  }
+]
