@@ -14,7 +14,7 @@ import (
 // number in `latest-<N>-group-manual` bumps whenever search.nixos.org changes
 // its schema (it was 44, is 48 as of this writing), so a hardcoded value goes
 // stale — probe a range once and pin the highest live generation.
-var flakeIndexCache = &memo[string]{loader: discoverFlakeIndex}
+var flakeIndexCache = &memo[string]{ttl: cacheTTL, loader: discoverFlakeIndex}
 
 func discoverFlakeIndex(ctx context.Context) (string, error) {
 	const lo, hi = 44, 64

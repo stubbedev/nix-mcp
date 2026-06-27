@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
@@ -21,36 +22,23 @@ var fallbackChannels = map[string]string{
 	"beta":     "latest-44-nixos-25.11",
 }
 
-type chanCache struct {
-	mu            sync.Mutex
-	available     map[string]string // index -> "N documents"
-	resolved      map[string]string // channel name -> index
-	usingFallback bool
+type channelData struct {
+	available map[string]string // index -> "N documents"
+	resolved  map[string]string // channel name -> index
 }
 
-var channelCache = &chanCache{}
+// channelMemo discovers + resolves NixOS channels, refreshing on the TTL so a
+// long-running server picks up new index generations without a restart.
+var channelMemo = &memo[channelData]{ttl: cacheTTL, loader: loadChannels}
 
-func (c *chanCache) getAvailable(ctx context.Context) map[string]string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.available == nil {
-		c.available = discoverAvailable(ctx)
+func loadChannels(ctx context.Context) (channelData, error) {
+	available := discoverAvailable(ctx)
+	if len(available) == 0 {
+		// Don't cache a discovery failure — the next call retries, so a
+		// transient blip can't pin the server to fallback channels.
+		return channelData{}, errors.New("channel discovery failed")
 	}
-	return c.available
-}
-
-func (c *chanCache) getResolved(ctx context.Context) map[string]string {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.resolved != nil {
-		return c.resolved
-	}
-	// getAvailable below re-locks; release first.
-	c.mu.Unlock()
-	avail := c.getAvailable(ctx)
-	c.mu.Lock()
-	c.resolved = resolveChannels(avail, &c.usingFallback)
-	return c.resolved
+	return channelData{available: available, resolved: resolveChannels(available)}, nil
 }
 
 func discoverAvailable(ctx context.Context) map[string]string {
@@ -81,9 +69,8 @@ func discoverAvailable(ctx context.Context) map[string]string {
 	return available
 }
 
-func resolveChannels(available map[string]string, usingFallback *bool) map[string]string {
+func resolveChannels(available map[string]string) map[string]string {
 	if len(available) == 0 {
-		*usingFallback = true
 		return cloneMap(fallbackChannels)
 	}
 	resolved := map[string]string{}
@@ -153,7 +140,6 @@ func resolveChannels(available map[string]string, usingFallback *bool) map[strin
 		resolved["beta"] = s
 	}
 	if len(resolved) == 0 {
-		*usingFallback = true
 		return cloneMap(fallbackChannels)
 	}
 	return resolved
@@ -165,7 +151,13 @@ func cloneMap(m map[string]string) map[string]string {
 	return out
 }
 
-func getChannels(ctx context.Context) map[string]string { return channelCache.getResolved(ctx) }
+func getChannels(ctx context.Context) map[string]string {
+	cd, err := channelMemo.get(ctx)
+	if err != nil {
+		return cloneMap(fallbackChannels) // transient last resort (not cached)
+	}
+	return cd.resolved
+}
 
 func channelSuggestions(ctx context.Context, invalid string) string {
 	channels := getChannels(ctx)
@@ -291,11 +283,15 @@ func channelRevision(ctx context.Context, name, index string) (string, string) {
 }
 
 func listChannels(ctx context.Context) string {
-	configured := getChannels(ctx)
-	available := channelCache.getAvailable(ctx)
+	cd, err := channelMemo.get(ctx)
+	configured, available := cd.resolved, cd.available
+	usingFallback := err != nil
+	if usingFallback {
+		configured, available = cloneMap(fallbackChannels), map[string]string{}
+	}
 
 	var results []string
-	if channelCache.usingFallback {
+	if usingFallback {
 		results = append(results, "WARNING: Using fallback channels (API discovery failed)\n")
 	}
 	results = append(results, "NixOS Channels:\n")

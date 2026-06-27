@@ -1,6 +1,11 @@
 package app
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+)
 
 func TestComma(t *testing.T) {
 	cases := map[int]string{0: "0", 12: "12", 1234: "1,234", 1234567: "1,234,567", 100000: "100,000"}
@@ -55,11 +60,7 @@ func TestResolveChannels(t *testing.T) {
 		"latest-46-nixos-25.11":    "155,783 documents",
 		"latest-44-nixos-25.05":    "150,000 documents",
 	}
-	var fb bool
-	r := resolveChannels(avail, &fb)
-	if fb {
-		t.Fatal("unexpected fallback")
-	}
+	r := resolveChannels(avail)
 	if r["unstable"] != "latest-45-nixos-unstable" {
 		t.Errorf("unstable = %q", r["unstable"])
 	}
@@ -76,10 +77,45 @@ func TestResolveChannels(t *testing.T) {
 }
 
 func TestResolveChannelsFallback(t *testing.T) {
-	var fb bool
-	r := resolveChannels(map[string]string{}, &fb)
-	if !fb || r["unstable"] != "latest-44-nixos-unstable" {
-		t.Errorf("fallback not applied: fb=%v r=%v", fb, r)
+	r := resolveChannels(map[string]string{})
+	if r["unstable"] != "latest-44-nixos-unstable" {
+		t.Errorf("fallback not applied: r=%v", r)
+	}
+}
+
+func TestMemoTTL(t *testing.T) {
+	calls := 0
+	m := &memo[int]{ttl: 50 * time.Millisecond, loader: func(context.Context) (int, error) {
+		calls++
+		return calls, nil
+	}}
+	if v, _ := m.get(context.Background()); v != 1 {
+		t.Fatalf("first get = %d", v)
+	}
+	if v, _ := m.get(context.Background()); v != 1 {
+		t.Fatalf("cached get = %d (should reuse)", v)
+	}
+	time.Sleep(60 * time.Millisecond)
+	if v, _ := m.get(context.Background()); v != 2 {
+		t.Fatalf("post-TTL get = %d (should refresh)", v)
+	}
+}
+
+func TestMemoServeStale(t *testing.T) {
+	fail := false
+	m := &memo[int]{ttl: time.Millisecond, loader: func(context.Context) (int, error) {
+		if fail {
+			return 0, errors.New("boom")
+		}
+		return 42, nil
+	}}
+	if v, err := m.get(context.Background()); v != 42 || err != nil {
+		t.Fatalf("first get = %d, %v", v, err)
+	}
+	fail = true
+	time.Sleep(2 * time.Millisecond)
+	if v, err := m.get(context.Background()); v != 42 || err != nil {
+		t.Fatalf("stale get = %d, %v (should serve last good value)", v, err)
 	}
 }
 
