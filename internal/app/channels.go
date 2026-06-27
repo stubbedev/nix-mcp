@@ -55,15 +55,29 @@ func (c *chanCache) getResolved(ctx context.Context) map[string]string {
 func discoverAvailable(ctx context.Context) map[string]string {
 	generations := []int{43, 44, 45, 46}
 	versions := []string{"unstable", "25.05", "25.11", "26.05", "26.11"}
-	available := map[string]string{}
+	// Probe all 20 candidate indices concurrently — sequential _count calls
+	// dominated cold-start latency; the result is a map so order is irrelevant.
+	type res struct{ pattern, val string }
+	ch := make(chan res, len(generations)*len(versions))
+	var wg sync.WaitGroup
 	for _, gen := range generations {
 		for _, v := range versions {
 			pattern := fmt.Sprintf("latest-%d-nixos-%s", gen, v)
-			count, err := esCount(ctx, pattern, map[string]any{"match_all": map[string]any{}}, 10*time.Second)
-			if err == nil && count > 0 {
-				available[pattern] = comma(count) + " documents"
-			}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				count, err := esCount(ctx, pattern, map[string]any{"match_all": map[string]any{}}, 10*time.Second)
+				if err == nil && count > 0 {
+					ch <- res{pattern, comma(count) + " documents"}
+				}
+			}()
 		}
+	}
+	wg.Wait()
+	close(ch)
+	available := map[string]string{}
+	for r := range ch {
+		available[r.pattern] = r.val
 	}
 	return available
 }

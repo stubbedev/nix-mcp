@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -316,8 +317,20 @@ func checkBinaryCache(ctx context.Context, name, version, system string) string 
 	}
 
 	results := []string{fmt.Sprintf("Binary Cache Status: %s@%s", pkgName, pkgVersion), ""}
-	for _, s := range systems {
-		results = append(results, checkSystemCache(ctx, s.name, s.storePath)...)
+	// Check each system's cache status concurrently (matches the Python
+	// implementation); collect by index to keep the output order stable.
+	sysResults := make([][]string, len(systems))
+	var wg sync.WaitGroup
+	for i, s := range systems {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sysResults[i] = checkSystemCache(ctx, s.name, s.storePath)
+		}()
+	}
+	wg.Wait()
+	for _, sr := range sysResults {
+		results = append(results, sr...)
 	}
 	return strings.TrimSpace(strings.Join(results, "\n"))
 }
