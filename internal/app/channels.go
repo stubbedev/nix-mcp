@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"maps"
@@ -15,11 +16,11 @@ import (
 
 // fallbackChannels are used when API discovery fails (mirrors FALLBACK_CHANNELS).
 var fallbackChannels = map[string]string{
-	"unstable": "latest-44-nixos-unstable",
-	"stable":   "latest-44-nixos-25.11",
-	"25.05":    "latest-44-nixos-25.05",
-	"25.11":    "latest-44-nixos-25.11",
-	"beta":     "latest-44-nixos-25.11",
+	"unstable": "latest-48-nixos-unstable",
+	"stable":   "latest-48-nixos-26.05",
+	"26.05":    "latest-48-nixos-26.05",
+	"25.11":    "latest-48-nixos-25.11",
+	"beta":     "latest-48-nixos-26.05",
 }
 
 type channelData struct {
@@ -42,23 +43,22 @@ func loadChannels(ctx context.Context) (channelData, error) {
 }
 
 func discoverAvailable(ctx context.Context) map[string]string {
-	generations := []int{43, 44, 45, 46}
-	versions := []string{"unstable", "25.05", "25.11", "26.05", "26.11"}
-	// Probe all 20 candidate indices concurrently — sequential _count calls
+	aliases, err := discoverChannelAliases(ctx)
+	if err != nil {
+		return map[string]string{}
+	}
+	// Probe candidate indices concurrently — sequential _count calls
 	// dominated cold-start latency; the result is a map so order is irrelevant.
 	type res struct{ pattern, val string }
-	ch := make(chan res, len(generations)*len(versions))
+	ch := make(chan res, len(aliases))
 	var wg sync.WaitGroup
-	for _, gen := range generations {
-		for _, v := range versions {
-			pattern := fmt.Sprintf("latest-%d-nixos-%s", gen, v)
-			safeGo(&wg, func() {
-				count, err := esCount(ctx, pattern, map[string]any{"match_all": map[string]any{}})
-				if err == nil && count > 0 {
-					ch <- res{pattern, comma(count) + " documents"}
-				}
-			})
-		}
+	for _, pattern := range aliases {
+		safeGo(&wg, func() {
+			count, err := esCount(ctx, pattern, map[string]any{"match_all": map[string]any{}})
+			if err == nil && count > 0 {
+				ch <- res{pattern, comma(count) + " documents"}
+			}
+		})
 	}
 	wg.Wait()
 	close(ch)
@@ -69,75 +69,80 @@ func discoverAvailable(ctx context.Context) map[string]string {
 	return available
 }
 
+var channelAliasRE = regexp.MustCompile(`^latest-([0-9]+)-nixos-(unstable|[0-9]+\.[0-9]+)$`)
+
+func discoverChannelAliases(ctx context.Context) ([]string, error) {
+	var entries []struct {
+		Alias string `json:"alias"`
+	}
+	if err := getJSON(ctx, nixosAPI+"/_cat/aliases", map[string]string{"format": "json"}, map[string]string{
+		"Authorization": "Basic " + base64.StdEncoding.EncodeToString([]byte(nixosAuth[0]+":"+nixosAuth[1])),
+	}, 10*time.Second, &entries); err != nil {
+		return nil, err
+	}
+	seen := map[string]bool{}
+	var aliases []string
+	for _, entry := range entries {
+		alias := strings.TrimSpace(entry.Alias)
+		if channelAliasRE.MatchString(alias) && !seen[alias] {
+			aliases = append(aliases, alias)
+			seen[alias] = true
+		}
+	}
+	return aliases, nil
+}
+
 func resolveChannels(available map[string]string) map[string]string {
 	if len(available) == 0 {
 		return cloneMap(fallbackChannels)
 	}
-	resolved := map[string]string{}
-	for pattern := range available {
-		if strings.Contains(pattern, "unstable") {
-			resolved["unstable"] = pattern
-			break
-		}
-	}
-
 	type cand struct {
-		major, minor int
-		version      string
-		pattern      string
-		count        int
+		generation int
+		pattern    string
 	}
-	var candidates []cand
-	for pattern, countStr := range available {
-		if strings.Contains(pattern, "unstable") {
+	byChannel := map[string]cand{}
+	for pattern := range available {
+		m := channelAliasRE.FindStringSubmatch(pattern)
+		if m == nil {
 			continue
 		}
-		parts := strings.Split(pattern, "-")
-		if len(parts) < 4 {
+		gen, err := strconv.Atoi(m[1])
+		if err != nil {
 			continue
 		}
-		version := parts[3]
-		mm := strings.Split(version, ".")
-		if len(mm) != 2 {
-			continue
-		}
-		major, err1 := strconv.Atoi(mm[0])
-		minor, err2 := strconv.Atoi(mm[1])
-		count, err3 := strconv.Atoi(strings.ReplaceAll(strings.ReplaceAll(countStr, ",", ""), " documents", ""))
-		if err1 != nil || err2 != nil || err3 != nil {
-			continue
-		}
-		candidates = append(candidates, cand{major, minor, version, pattern, count})
-	}
-
-	if len(candidates) > 0 {
-		sort.Slice(candidates, func(i, j int) bool {
-			a, b := candidates[i], candidates[j]
-			if a.major != b.major {
-				return a.major > b.major
-			}
-			if a.minor != b.minor {
-				return a.minor > b.minor
-			}
-			return a.count > b.count
-		})
-		cur := candidates[0]
-		resolved["stable"] = cur.pattern
-		resolved[cur.version] = cur.pattern
-
-		best := map[string]cand{}
-		for _, c := range candidates {
-			if e, ok := best[c.version]; !ok || c.count > e.count {
-				best[c.version] = c
-			}
-		}
-		for version, c := range best {
-			resolved[version] = c.pattern
+		channel := m[2]
+		if existing, ok := byChannel[channel]; !ok || gen > existing.generation {
+			byChannel[channel] = cand{generation: gen, pattern: pattern}
 		}
 	}
 
-	if s, ok := resolved["stable"]; ok {
-		resolved["beta"] = s
+	resolved := map[string]string{}
+	if c, ok := byChannel["unstable"]; ok {
+		resolved["unstable"] = c.pattern
+	}
+	releases := make([]string, 0, len(byChannel))
+	for version := range byChannel {
+		if version != "unstable" {
+			releases = append(releases, version)
+		}
+	}
+	sort.Slice(releases, func(i, j int) bool {
+		ai, aj := strings.Split(releases[i], "."), strings.Split(releases[j], ".")
+		majorI, _ := strconv.Atoi(ai[0])
+		majorJ, _ := strconv.Atoi(aj[0])
+		if majorI != majorJ {
+			return majorI > majorJ
+		}
+		minorI, _ := strconv.Atoi(ai[1])
+		minorJ, _ := strconv.Atoi(aj[1])
+		return minorI > minorJ
+	})
+	for _, version := range releases {
+		resolved[version] = byChannel[version].pattern
+	}
+	if len(releases) > 0 {
+		resolved["stable"] = resolved[releases[0]]
+		resolved["beta"] = resolved["stable"]
 	}
 	if len(resolved) == 0 {
 		return cloneMap(fallbackChannels)
