@@ -17,7 +17,6 @@ import (
 // API endpoints (mirrors the Python config.py).
 const (
 	nixosAPI       = "https://search.nixos.org/backend"
-	homeManagerURL = "https://nix-community.github.io/home-manager/options.xhtml"
 	darwinURL      = "https://nix-darwin.github.io/nix-darwin/manual/index.html"
 	flakehubAPI    = "https://api.flakehub.com"
 	wikiAPI        = "https://wiki.nixos.org/w/api.php"
