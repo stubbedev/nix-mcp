@@ -120,21 +120,26 @@ jobs:
 
       - run: nix flake check --print-build-logs
 
-      # Push the built package closure to the self-hosted attic cache on master
+      # Push the built package closure to the self-hosted xilo cache on master
       # pushes, so `nix run`/flake consumers pull a prebuilt binary. Best-effort.
-      - name: push nix build to attic (master)
+      - name: setup xilo (master)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+        uses: stubbedev/xilo@v1
+        with:
+          url: https://nix.stubbe.dev
+          cache: default
+          token: ${{ secrets.XILO_TOKEN }}
+
+      - name: push nix build to xilo (master)
         if: github.event_name == 'push' && github.ref == 'refs/heads/master'
         continue-on-error: true
-        env:
-          ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
         run: |
           OUT=$(nix build .#nix-mcp --no-link --print-out-paths)
-          nix run nixpkgs#attic-client -- login stubbe https://nix.stubbe.dev "$ATTIC_TOKEN"
           for attempt in 1 2 3; do
-            if nix run nixpkgs#attic-client -- push default $OUT; then
+            if xilo push default $OUT; then
               exit 0
             fi
-            echo "::warning::attic push attempt $attempt failed; retrying in $((attempt * 30))s"
+            echo "::warning::xilo push attempt $attempt failed; retrying in $((attempt * 30))s"
             sleep $((attempt * 30))
           done
-          echo "::warning::attic push failed after 3 attempts; cache push is best-effort, continuing"
+          echo "::warning::xilo push failed after 3 attempts; cache push is best-effort, continuing"

@@ -57,7 +57,7 @@ jobs:
           retention-days: 7
 
   cache:
-    name: push nix build to attic
+    name: push nix build to xilo
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -67,20 +67,24 @@ jobs:
       - name: Build package
         run: nix build .#nix-mcp -L --print-out-paths | tee /tmp/outpaths
 
-      - name: Push to attic
+      - name: setup xilo
+        uses: stubbedev/xilo@v1
+        with:
+          url: https://nix.stubbe.dev
+          cache: default
+          token: ${{ secrets.XILO_TOKEN }}
+
+      - name: Push to xilo
         continue-on-error: true
-        env:
-          ATTIC_TOKEN: ${{ secrets.ATTIC_TOKEN }}
         run: |
-          nix run nixpkgs#attic-client -- login stubbe https://nix.stubbe.dev "$ATTIC_TOKEN"
           for attempt in 1 2 3; do
-            if nix run nixpkgs#attic-client -- push default $(cat /tmp/outpaths); then
+            if xilo push default $(cat /tmp/outpaths); then
               exit 0
             fi
-            echo "::warning::attic push attempt $attempt failed; retrying in $((attempt * 30))s"
+            echo "::warning::xilo push attempt $attempt failed; retrying in $((attempt * 30))s"
             sleep $((attempt * 30))
           done
-          echo "::warning::attic push failed after 3 attempts; cache push is best-effort, continuing"
+          echo "::warning::xilo push failed after 3 attempts; cache push is best-effort, continuing"
 
   release:
     name: publish github release
