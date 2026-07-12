@@ -42,10 +42,7 @@ jobs:
           curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/HEAD/install.sh \
             | sh -s -- -b "$(go env GOPATH)/bin" v2.12.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
-      - name: install just
-        run: |
-          curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh \
-            | bash -s -- --to "$(go env GOPATH)/bin"
+      - uses: extractions/setup-just@v4
       - name: just lint-check
         run: just lint-check
 
