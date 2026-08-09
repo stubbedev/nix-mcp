@@ -178,10 +178,14 @@ func TestHomeManagerSearchInfoStatsUseBackend(t *testing.T) {
 		switch {
 		case strings.HasSuffix(req.URL.Path, "/_search") && strings.Contains(bodyText, `"size":3`):
 			sawSearch = true
-			return testJSONResponse(`{"hits":{"total":{"value":1},"hits":[{"_source":{"option_name":"programs.git.enable","option_type":"boolean","option_description":"<rendered-html><p>Enable Git.</p></rendered-html>"}}]}}`), nil
+			return testJSONResponse(
+				`{"hits":{"total":{"value":1},"hits":[{"_source":{"option_name":"programs.git.enable","option_type":"boolean","option_description":"<rendered-html><p>Enable Git.</p></rendered-html>"}}]}}`,
+			), nil
 		case strings.HasSuffix(req.URL.Path, "/_search") && strings.Contains(bodyText, `"programs.git.enable"`):
 			sawInfo = true
-			return testJSONResponse(`{"hits":{"total":{"value":1},"hits":[{"_source":{"option_name":"programs.git.enable","option_type":"boolean","option_description":"<rendered-html><p>Enable Git.</p></rendered-html>","option_default":"false"}}]}}`), nil
+			return testJSONResponse(
+				`{"hits":{"total":{"value":1},"hits":[{"_source":{"option_name":"programs.git.enable","option_type":"boolean","option_description":"<rendered-html><p>Enable Git.</p></rendered-html>","option_default":"false"}}]}}`,
+			), nil
 		case strings.HasSuffix(req.URL.Path, "/_count"):
 			sawStats = true
 			return testJSONResponse(`{"count":5388}`), nil
