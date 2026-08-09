@@ -39,7 +39,10 @@ func rootFromString(s string) (mcpRoot, bool) {
 // rootHeaders are the request headers a proxy/harness may set to hand the
 // server the workspace root(s) without the MCP roots round-trip. Values are
 // file:// URIs or plain paths; multiple roots may be comma-separated.
-var rootHeaders = []string{"X-Mcp-Roots", "X-Mcp-Root", "Mcp-Roots", "Mcp-Root"}
+// X-Repo-Root leads: it is the name the rest of this fleet reads and the one
+// the Claude Code entries send, and headers are the only workspace signal that
+// survives MCP 2026-07-28 (see resolveRoots).
+var rootHeaders = []string{"X-Repo-Root", "X-Mcp-Roots", "X-Mcp-Root", "Mcp-Roots", "Mcp-Root"}
 
 func parseRootHeaders(h http.Header) []mcpRoot {
 	var roots []mcpRoot
@@ -71,9 +74,9 @@ func resolveRoots(ctx context.Context, req *mcp.CallToolRequest) []mcpRoot {
 		return nil
 	}
 	// Only ask for roots when the client advertised the capability — otherwise
-	// ListRoots blocks until timeout against clients that don't support it.
-	ip := req.Session.InitializeParams()
-	if ip == nil || ip.Capabilities == nil || ip.Capabilities.RootsV2 == nil {
+	// ListRoots blocks until timeout against clients that don't support it —
+	// and only below rootsRemovedFrom, where a server may still ask at all.
+	if !rootsAllowed(req.Session.InitializeParams()) {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -102,4 +105,21 @@ func rootDir(ctx context.Context, req *mcp.CallToolRequest, explicit string) str
 		}
 	}
 	return "."
+}
+
+// rootsRemovedFrom is the first protocol revision that forbids server-initiated
+// JSON-RPC requests (SEP-2322 / SEP-2575): from there on roots/list is not
+// something a server can ask for, only something a tool handler can request via
+// InputRequests. Clients on that revision must pin the workspace with one of
+// the rootHeaders instead. ISO dates compare correctly as strings.
+const rootsRemovedFrom = "2026-07-28"
+
+// rootsAllowed reports whether the client behind these initialize params may
+// still be asked for its roots: it advertised the capability, on a protocol
+// version that still allows the question.
+func rootsAllowed(ip *mcp.InitializeParams) bool {
+	if ip == nil || ip.Capabilities == nil || ip.ProtocolVersion >= rootsRemovedFrom {
+		return false
+	}
+	return ip.Capabilities.RootsV2 != nil
 }
