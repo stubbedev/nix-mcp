@@ -11,8 +11,9 @@ a ~150 MB Python runtime).
   serve many clients/worktrees; `flake-inputs` resolves the flake directory
   from the calling client's root.
 - **Live data**: queries search.nixos.org (Elasticsearch), NixHub, FlakeHub,
-  cache.nixos.org, the NixOS wiki, nix.dev, Noogle, and the Home Manager /
-  nix-darwin / Nixvim option docs — faster and more current than `nix search`.
+  cache.nixos.org, the NixOS wiki, nix.dev, Noogle, Home Manager options,
+  and the nix-darwin / Nixvim option docs — faster and more current than
+  `nix search`.
 - **No runtime deps** beyond `nix` itself, and only for `flake-inputs` (which
   shells out to `nix flake archive`); everything else is pure Go.
 
@@ -90,8 +91,9 @@ Two tools are exposed (no gating — both are always available):
     option, flakehub `org/project`, wiki page, nix.dev page, noogle function,
     nixhub package).
   - `action=stats` — counts per source.
-  - `action=browse` — walk an option tree by prefix (`home-manager`, `darwin`,
-    `nixvim`, `noogle`).
+  - `action=browse` — walk an option tree by prefix (`darwin`, `noogle`);
+    for Home Manager option-name fragments or keywords, use `action=search`
+    with `source=home-manager`.
   - `action=channels` — list NixOS channels with indexed/branch revisions.
   - `action=flake-inputs` — `type=list|ls|read` over a flake's inputs (uses the
     client root / `source` path; requires `nix` on PATH).
@@ -107,11 +109,13 @@ Improvements over the upstream `mcp-nixos` (whose scrapers for these had broken)
 - **flakes** — the search index generation (`latest-N-group-manual`) is now
   discovered at runtime instead of hardcoded, so flake search/stats work again
   (upstream's index data is currently sparse, but the query is correct).
-- **home-manager** / **nixvim** — these upstreams replaced their scrapeable docs
-  with formats that expose no bulk/queryable endpoint (paginated mdBook HTML /
-  a binary WASM-decoded index). These sources return a clear "unavailable"
-  message instead of silently empty results. **nixos** and **darwin** option
-  search are unaffected and work.
+- **home-manager** — search, exact info, and stats use search.nixos.org's
+  `home-manager-option` index. Legacy `action=browse` calls return guidance;
+  Home Manager tree browse is not available.
+- **nixvim** — upstream replaced its scrapeable docs with a binary
+  WASM-decoded index, so it returns a clear "unavailable" message instead of
+  silently empty results. **nixos** and **darwin** option search are unaffected
+  and work.
 
 ## Development
 

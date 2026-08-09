@@ -11,6 +11,11 @@ import (
 
 var renderedHTMLTag = regexp.MustCompile(`<[^>]+>`)
 
+const (
+	nixosOptionType       = "option"
+	homeManagerOptionType = "home-manager-option"
+)
+
 func cleanOptionDesc(desc string) string {
 	if strings.Contains(desc, "<rendered-html>") {
 		desc = strings.ReplaceAll(desc, "<rendered-html>", "")
@@ -23,6 +28,9 @@ func cleanOptionDesc(desc string) string {
 func searchNixOS(ctx context.Context, query, searchType string, limit int, channel string) string {
 	if searchType == "flakes" {
 		return searchFlakes(ctx, query, limit)
+	}
+	if searchType == "options" {
+		return searchOptions(ctx, query, "options", nixosOptionType, limit, channel)
 	}
 
 	channels := getChannels(ctx)
@@ -44,15 +52,6 @@ func searchNixOS(ctx context.Context, query, searchType string, limit int, chann
 				map[string]any{"match": map[string]any{"package_pname": map[string]any{"query": pnameQuery, "boost": 3}}},
 				map[string]any{"match": map[string]any{"package_attr_name": map[string]any{"query": query, "boost": 2}}},
 				map[string]any{"match": map[string]any{"package_description": pnameQuery}},
-			},
-			"minimum_should_match": 1,
-		}}
-	case "options":
-		q = map[string]any{"bool": map[string]any{
-			"must": []any{map[string]any{"term": map[string]any{"type": "option"}}},
-			"should": []any{
-				map[string]any{"wildcard": map[string]any{"option_name": "*" + query + "*"}},
-				map[string]any{"match": map[string]any{"option_description": query}},
 			},
 			"minimum_should_match": 1,
 		}}
@@ -93,18 +92,6 @@ func searchNixOS(ctx context.Context, query, searchType string, limit int, chann
 				results = append(results, "  "+desc)
 			}
 			results = append(results, "")
-		case "options":
-			name := srcStr(src, "option_name")
-			optType := srcStr(src, "option_type")
-			desc := cleanOptionDesc(srcStr(src, "option_description"))
-			results = append(results, "* "+name)
-			if optType != "" {
-				results = append(results, "  Type: "+optType)
-			}
-			if desc != "" {
-				results = append(results, "  "+desc)
-			}
-			results = append(results, "")
 		default: // programs
 			pkgName := srcStr(src, "package_pname")
 			ql := strings.ToLower(query)
@@ -117,6 +104,53 @@ func searchNixOS(ctx context.Context, query, searchType string, limit int, chann
 		}
 	}
 	return strings.TrimSpace(strings.Join(results, "\n"))
+}
+
+func searchHomeManagerOptions(ctx context.Context, query string, limit int, channel string) string {
+	return searchOptions(ctx, query, "Home Manager options", homeManagerOptionType, limit, channel)
+}
+
+func searchOptions(ctx context.Context, query, label, optionType string, limit int, channel string) string {
+	channels := getChannels(ctx)
+	index, ok := channels[channel]
+	if !ok {
+		return errMsg(fmt.Sprintf("Invalid channel '%s'. %s", channel, channelSuggestions(ctx, channel)))
+	}
+	hits, err := esQuery(ctx, index, optionSearchQuery(query, optionType), limit)
+	if err != nil {
+		return errMsg(err.Error())
+	}
+	if len(hits) == 0 {
+		return fmt.Sprintf("No %s found matching '%s'", label, query)
+	}
+
+	results := []string{fmt.Sprintf("Found %d %s matching '%s':\n", len(hits), label, query)}
+	for _, hit := range hits {
+		src := hit.Source
+		name := srcStr(src, "option_name")
+		optType := srcStr(src, "option_type")
+		desc := cleanOptionDesc(srcStr(src, "option_description"))
+		results = append(results, "* "+name)
+		if optType != "" {
+			results = append(results, "  Type: "+optType)
+		}
+		if desc != "" {
+			results = append(results, "  "+desc)
+		}
+		results = append(results, "")
+	}
+	return strings.TrimSpace(strings.Join(results, "\n"))
+}
+
+func optionSearchQuery(query, optionType string) map[string]any {
+	return map[string]any{"bool": map[string]any{
+		"must": []any{map[string]any{"term": map[string]any{"type": optionType}}},
+		"should": []any{
+			map[string]any{"wildcard": map[string]any{"option_name": "*" + query + "*"}},
+			map[string]any{"match": map[string]any{"option_description": query}},
+		},
+		"minimum_should_match": 1,
+	}}
 }
 
 func infoNixOS(ctx context.Context, name, infoType, channel string) string {
@@ -248,8 +282,21 @@ func pnameDisambiguation(name, channel, attr, pname string, candidates []esHit) 
 }
 
 func infoNixOSOption(ctx context.Context, index, name string) string {
+	return infoOption(ctx, index, name, nixosOptionType)
+}
+
+func infoHomeManagerOption(ctx context.Context, name, channel string) string {
+	channels := getChannels(ctx)
+	index, ok := channels[channel]
+	if !ok {
+		return errMsg(fmt.Sprintf("Invalid channel '%s'. %s", channel, channelSuggestions(ctx, channel)))
+	}
+	return infoOption(ctx, index, name, homeManagerOptionType)
+}
+
+func infoOption(ctx context.Context, index, name, optionType string) string {
 	query := map[string]any{"bool": map[string]any{"must": []any{
-		map[string]any{"term": map[string]any{"type": "option"}},
+		map[string]any{"term": map[string]any{"type": optionType}},
 		map[string]any{"term": map[string]any{"option_name": name}},
 	}}}
 	hits, err := esQuery(ctx, index, query, 1)
@@ -276,6 +323,19 @@ func infoNixOSOption(ctx context.Context, index, name string) string {
 	return strings.Join(info, "\n")
 }
 
+func statsHomeManagerOptions(ctx context.Context, channel string) string {
+	channels := getChannels(ctx)
+	index, ok := channels[channel]
+	if !ok {
+		return errMsg(fmt.Sprintf("Invalid channel '%s'. %s", channel, channelSuggestions(ctx, channel)))
+	}
+	optCount, err := esCount(ctx, index, map[string]any{"term": map[string]any{"type": homeManagerOptionType}})
+	if err != nil || optCount == 0 {
+		return errMsg("Failed to retrieve Home Manager statistics")
+	}
+	return fmt.Sprintf("Home Manager Statistics (%s):\n* Options: %s", channel, comma(optCount))
+}
+
 func statsNixOS(ctx context.Context, channel string) string {
 	channels := getChannels(ctx)
 	index, ok := channels[channel]
@@ -286,7 +346,9 @@ func statsNixOS(ctx context.Context, channel string) string {
 	var pkgCount, optCount int64
 	var wg sync.WaitGroup
 	safeGo(&wg, func() { pkgCount, _ = esCount(ctx, index, map[string]any{"term": map[string]any{"type": "package"}}) })
-	safeGo(&wg, func() { optCount, _ = esCount(ctx, index, map[string]any{"term": map[string]any{"type": "option"}}) })
+	safeGo(&wg, func() {
+		optCount, _ = esCount(ctx, index, map[string]any{"term": map[string]any{"type": nixosOptionType}})
+	})
 	wg.Wait()
 	if pkgCount == 0 && optCount == 0 {
 		return errMsg("Failed to retrieve statistics")
