@@ -320,11 +320,8 @@ func TestHomeManagerBrowseFallback(t *testing.T) {
 	}
 }
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
-	return f(req)
-}
+// roundTripFunc and its RoundTrip live at the top of this file — both option
+// -search branches introduced a copy, and only one can survive the merge.
 
 func testJSONResponse(body string) *http.Response {
 	return &http.Response{
