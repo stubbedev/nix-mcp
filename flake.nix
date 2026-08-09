@@ -13,7 +13,7 @@
 
         nix-mcp = pkgs.buildGoModule {
           pname = "nix-mcp";
-          version = "0.0.1";
+          version = "0.0.2";
           src = ./.;
           # buildGoModule fetches Go deps through the module proxy and hashes
           # the resulting vendor tree; `vendorHash` pins that hash so the
@@ -26,7 +26,7 @@
           ldflags = [
             "-s"
             "-w"
-            "-X github.com/stubbedev/nix-mcp/version.Version=0.0.1"
+            "-X github.com/stubbedev/nix-mcp/version.Version=0.0.2"
           ];
           doCheck = true;
 
