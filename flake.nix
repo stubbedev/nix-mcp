@@ -11,7 +11,7 @@
       let
         pkgs = import nixpkgs { inherit system; };
 
-        nix-mcp = pkgs.buildGoModule {
+        nix-mcp = pkgs.buildGo127Module {
           pname = "nix-mcp";
           version = "0.0.2";
           src = ./.;
@@ -55,7 +55,7 @@
 
         devShells.default = pkgs.mkShell {
           packages = with pkgs; [
-            go
+            go_1_27
             gopls
             golangci-lint
             just

@@ -43,8 +43,8 @@ func searchNixOS(ctx context.Context, query, searchType string, limit int, chann
 	switch searchType {
 	case "packages":
 		pnameQuery := query
-		if i := strings.LastIndex(query, "."); i >= 0 {
-			pnameQuery = query[i+1:]
+		if _, after, ok := strings.CutLast(query, "."); ok {
+			pnameQuery = after
 		}
 		q = map[string]any{"bool": map[string]any{
 			"must": []any{map[string]any{"term": map[string]any{"type": "package"}}},

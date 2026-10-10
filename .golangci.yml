@@ -25,6 +25,7 @@ linters:
     # Anti-idiomatic for this codebase's deliberate style.
     - noinlineerr
     - exhaustruct
+    - exhaustruct_v5
     - nonamedreturns
     - err113
     - wrapcheck
