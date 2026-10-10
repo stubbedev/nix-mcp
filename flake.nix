@@ -21,7 +21,7 @@
           # tidy` that changes go.sum — `nix build` prints the expected hash on
           # mismatch, or run `just sync-flake`.
           # go-sum: 1626c0e10ffff62372f8a96282f63d1fa7fd940e4b877b820785b87fa4e2361f
-          vendorHash = "sha256-XYkmkCwkHyGJLPOd49QHSob1BQJSNn2UFfRkBj3BMK0=";
+          vendorHash = "sha256-A1aE1Dk1W+Okx+v9JWUuAD2GL48CswQVxJ7fAnteNp0=";
           subPackages = [ "." ];
           ldflags = [
             "-s"
