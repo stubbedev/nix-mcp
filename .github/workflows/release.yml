@@ -23,9 +23,6 @@ jobs:
             goarch: arm64
             os: ubuntu-latest
           - goos: darwin
-            goarch: amd64
-            os: macos-latest
-          - goos: darwin
             goarch: arm64
             os: macos-latest
     steps:
