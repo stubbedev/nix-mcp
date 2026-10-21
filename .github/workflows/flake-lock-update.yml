@@ -1,6 +1,6 @@
 name: flake-lock-update
 
-# Keeps flake.lock current with the configured inputs (nixpkgs, flake-utils).
+# Keeps flake.lock current with the configured inputs (nixpkgs, flake-parts).
 # Runs weekly and on demand. Commits straight to master with `[skip ci]`.
 
 on:
