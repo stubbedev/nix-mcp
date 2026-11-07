@@ -6,7 +6,7 @@ toolchain go1.27.2
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 )
 
 require (
