@@ -1,8 +1,8 @@
 {
-  perSystem = { lib, pkgs, self', ... }: {
+  perSystem = { inputs', lib, pkgs, self', ... }: {
     packages = {
       default = self'.packages.nix-mcp;
-      nix-mcp = pkgs.buildGo127Module rec {
+      nix-mcp = (pkgs.buildGoModule.override { go = inputs'.devtools.packages.go; }) rec {
         pname = "nix-mcp";
         version = "0.0.2";
         src = lib.fileset.toSource {
